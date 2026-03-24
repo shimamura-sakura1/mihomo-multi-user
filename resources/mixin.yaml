@@ -1,0 +1,25 @@
+# Mihomo Mixin 配置模板
+# 此配置与订阅配置深度合并，优先级最高
+
+# 端口配置
+mixed-port: 7890
+external-controller: "0.0.0.0:9090"
+external-ui: dist
+secret: ""
+
+# 网络配置
+allow-lan: true
+bind-address: "*"
+mode: rule
+
+# 日志
+log-level: info
+
+# DNS 配置
+dns:
+  enable: true
+  listen: 0.0.0.0:53
+  enhanced-mode: fake-ip
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
