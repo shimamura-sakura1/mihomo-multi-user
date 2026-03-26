@@ -4,17 +4,14 @@
 
 ---
 
-## 一键部署
+## 快速开始
 
 ```bash
-# 前置条件：系统已安装 mihomo
-sudo apt install mihomo  # 或其他安装方式
-
 # 一键部署（自动完成所有配置）
 ./deploy.sh --sub "你的订阅链接"
 
-# 如需代理环境变量
-SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
+# 更新订阅
+./update_subscription.sh
 ```
 
 **deploy.sh 自动完成：**
@@ -27,9 +24,95 @@ SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
 
 ---
 
+## 用户配置文件
+
+部署后生成 `~/.config/clash/.env`，存储用户配置：
+
+```bash
+# ~/.config/clash/.env
+MIXED_PORT=27890        # 代理端口
+EXTERNAL_PORT=8305      # Web UI 端口
+SECRET=mihomo           # Web UI 密钥
+SUB_URL=https://...     # 订阅链接
+NODE_DOMAIN=xxx.com     # 节点域名后缀
+```
+
+> **重要：** 更新订阅时会读取此文件，确保端口配置一致。
+
+---
+
+## 目录结构
+
+```
+~/.config/clash/
+├── config.yaml         # mihomo 主配置文件
+├── .env                # 用户环境配置（端口、订阅等）
+└── resources/
+    └── dist/           # Web UI 文件
+```
+
+---
+
+## 订阅更新
+
+### 手动更新
+
+```bash
+# 更新当前用户订阅
+./update_subscription.sh
+
+# 更新指定用户
+./update_subscription.sh --user username
+
+# 查看状态
+./update_subscription.sh --status
+```
+
+### 定时自动更新
+
+```bash
+# 添加 crontab 任务（每天凌晨 4 点更新）
+(crontab -l 2>/dev/null; echo "0 4 * * * $PWD/update_subscription.sh --auto") | crontab -
+```
+
+**update_subscription.sh 功能：**
+- 从 `~/.config/clash/.env` 读取端口配置
+- 保留原有端口设置
+- 自动备份旧配置（保留最近 10 个）
+- 自动重启服务
+- 自动切换 GLOBAL
+
+---
+
+## 服务管理
+
+```bash
+sudo systemctl start mihomo@$USER     # 启动
+sudo systemctl stop mihomo@$USER      # 停止
+sudo systemctl restart mihomo@$USER   # 重启
+sudo systemctl enable mihomo@$USER    # 开机自启
+systemctl status mihomo@$USER         # 状态
+journalctl -u mihomo@$USER -f         # 日志
+```
+
+---
+
+## 访问地址
+
+| 服务 | 地址 |
+|------|------|
+| 代理 (HTTP/SOCKS5) | `http://127.0.0.1:<MIXED_PORT>` |
+| Web UI (本地) | `http://127.0.0.1:<EXTERNAL_PORT>/ui/` |
+| Web UI (远程) | `http://<服务器IP>:<EXTERNAL_PORT>/ui/` |
+| 密钥 | `mihomo` |
+
+> 端口从 `~/.config/clash/.env` 读取，默认 7890/9090
+
+---
+
 ## 手动部署（详细步骤）
 
-如果一键部署失败，按以下步骤操作。
+如果一键部署失败，参考 [SETUP_GUIDE.md](SETUP_GUIDE.md)。
 
 ### 1. 安装服务模板（首次使用）
 
@@ -56,77 +139,33 @@ EOF
 sudo systemctl daemon-reload
 ```
 
-### 2. 创建目录结构
+### 2. 创建目录
 
 ```bash
 mkdir -p ~/.config/clash/resources/dist
 ```
 
-### 3. 下载订阅配置
+### 3. 下载订阅并配置
 
 ```bash
+# 下载订阅
 wget -O ~/.config/clash/config.yaml "你的订阅链接"
+
+# 创建用户配置
+cat > ~/.config/clash/.env <<EOF
+MIXED_PORT=7890
+EXTERNAL_PORT=9090
+SECRET=mihomo
+SUB_URL=你的订阅链接
+EOF
 ```
 
-### 4. 修改配置文件
-
-编辑 `~/.config/clash/config.yaml`：
-
-```yaml
-# 端口配置（检查是否冲突：ss -tunl | grep 7890）
-mixed-port: 7890
-
-# 控制台配置
-external-controller: 0.0.0.0:9090
-external-ui: /home/$(whoami)/.config/clash/resources/dist
-secret: "mihomo"
-
-# DNS 配置（解决节点域名解析问题）
-dns:
-  enable: true
-  respect-rules: false
-  listen: 0.0.0.0:1053
-  default-nameserver:
-    - 223.5.5.5
-  proxy-server-nameserver:
-    - system
-  enhanced-mode: redir-host
-  nameserver-policy:
-    "+.<节点域名后缀>":  # 如 "+.example.com"
-      - 223.5.5.5
-```
-
-### 5. 下载 Web UI
-
-```bash
-cd ~/.config/clash/resources
-wget https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip
-unzip dist.zip -d dist/
-# 修正嵌套目录
-[ -d dist/dist ] && mv dist/dist/* dist/ && rmdir dist/dist
-rm dist.zip
-```
-
-### 6. 启动服务
+### 4. 启动服务
 
 ```bash
 sudo systemctl start mihomo@$USER
-sudo systemctl enable mihomo@$USER  # 开机自启
+sudo systemctl enable mihomo@$USER
 ```
-
-### 7. 切换代理节点
-
-**重要！** GLOBAL 默认是 DIRECT，需要切换：
-
-```bash
-# API 方式切换
-curl -X PUT "http://localhost:9090/proxies/GLOBAL" \
-  -H "Authorization: Bearer mihomo" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"♻️ 故障切换"}'
-```
-
-或在 Web UI (`http://127.0.0.1:9090/ui/`) 中切换。
 
 ---
 
@@ -145,74 +184,6 @@ Mihomo 的流量走向：
 | 规则 | 根据 domain/IP 决定走哪个代理组 |
 | 代理组 | 如"国外流量"、"大陆流量"等 |
 | GLOBAL | 兜底选择，未匹配规则的流量走这里 |
-
-**验证流量走向：**
-```bash
-# 访问网站后查看日志
-curl -x http://127.0.0.1:7890 https://www.google.com
-journalctl -u mihomo@$USER -n 3 --no-pager
-
-# 示例输出：
-# Google → match RuleSet(Global) → 🌐 国际网站[🇯🇵 日本 05]
-# Bilibili → match RuleSet(AsianMedia) → DIRECT
-```
-
----
-
-## 使用方法
-
-### 设置代理环境变量
-
-```bash
-# 临时
-export http_proxy="http://127.0.0.1:7890"
-export https_proxy="http://127.0.0.1:7890"
-
-# 永久（写入 ~/.bashrc）
-echo 'export http_proxy="http://127.0.0.1:7890"' >> ~/.bashrc
-echo 'export https_proxy="http://127.0.0.1:7890"' >> ~/.bashrc
-source ~/.bashrc
-```
-
-### 验证代理
-
-```bash
-# 不走代理（SSH 转发）
-curl -s https://ipinfo.io/json | jq '.ip, .country'
-
-# 走代理
-curl -s --connect-timeout 30 -x http://127.0.0.1:7890 https://ipinfo.io/json | jq '.ip, .country'
-
-# 测试 Google
-curl -x http://127.0.0.1:7890 https://www.google.com -o /dev/null -w "%{http_code}\n"
-```
-
----
-
-## 服务管理
-
-```bash
-sudo systemctl start mihomo@$USER     # 启动
-sudo systemctl stop mihomo@$USER      # 停止
-sudo systemctl restart mihomo@$USER   # 重启
-sudo systemctl enable mihomo@$USER    # 开机自启
-systemctl status mihomo@$USER         # 状态
-journalctl -u mihomo@$USER -f         # 日志
-```
-
----
-
-## 访问地址
-
-| 服务 | 地址 |
-|------|------|
-| 代理 (HTTP/SOCKS5) | `http://127.0.0.1:7890` |
-| Web UI (本地) | `http://127.0.0.1:9090/ui/` |
-| Web UI (远程) | `http://<服务器IP>:9090/ui/` |
-| API | `http://localhost:9090` |
-| 密钥 | `mihomo` |
-
-> **远程访问 Web UI**: 将 `<服务器IP>` 替换为你的服务器地址
 
 ---
 
@@ -234,16 +205,13 @@ dns:
       - 223.5.5.5
 ```
 
+### Q: 更新订阅后端口变了？
+
+确保 `~/.config/clash/.env` 文件存在且端口配置正确。
+
 ### Q: operation not permitted？
 
 服务缺少网络权限，检查服务模板是否有 `CapabilityBoundingSet` 配置。
-
-### Q: 代理不生效？
-
-1. 确认服务运行：`systemctl status mihomo@$USER`
-2. 确认端口监听：`ss -tln | grep 7890`
-3. 确认 GLOBAL 不是 DIRECT
-4. 查看日志确认流量走向
 
 ---
 

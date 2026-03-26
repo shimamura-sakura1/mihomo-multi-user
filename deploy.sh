@@ -12,8 +12,10 @@
 set -e
 
 # ==================== 配置 ====================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLASH_DIR="$HOME/.config/clash"
 RESOURCES_DIR="$CLASH_DIR/resources"
+USER_ENV_FILE="$CLASH_DIR/.env"
 UI_URL="https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
 
 # 默认端口范围
@@ -21,6 +23,7 @@ DEFAULT_MIXED_PORT=7890
 DEFAULT_EXTERNAL_PORT=9090
 MIN_PORT=10000
 MAX_PORT=60000
+
 
 # ==================== 颜色输出 ====================
 RED='\033[0;31m'
@@ -112,6 +115,51 @@ extract_node_domain() {
     echo ""
 }
 
+# 获取服务器 IP
+get_server_ip() {
+    curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1"
+}
+
+# 生成用户级别的 .env 文件
+generate_user_env() {
+    local mixed_port=$1
+    local ext_port=$2
+    local node_domain=$3
+    local sub_url=$4
+
+    local server_ip=$(get_server_ip)
+
+    cat > "$USER_ENV_FILE" <<EOF
+# Mihomo 用户配置（自动生成）
+# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+
+# 代理端口
+MIXED_PORT=$mixed_port
+
+# Web UI 控制台端口
+EXTERNAL_PORT=$ext_port
+
+# Web UI 访问地址
+WEBUI_URL=http://127.0.0.1:${ext_port}/ui/
+WEBUI_URL_REMOTE=http://${server_ip}:${ext_port}/ui/
+
+# Web UI 密钥
+SECRET=mihomo
+
+# 节点域名（用于 DNS 策略）
+NODE_DOMAIN=${node_domain:-}
+
+# 订阅链接
+SUB_URL=${sub_url:-}
+
+# 代理地址
+HTTP_PROXY=http://127.0.0.1:$mixed_port
+SOCKS5_PROXY=socks5://127.0.0.1:$mixed_port
+EOF
+
+    ok "用户配置已保存到: $USER_ENV_FILE"
+}
+
 # 切换 GLOBAL 选择器到代理节点
 switch_global_proxy() {
     local ext_port=$1
@@ -141,7 +189,6 @@ switch_global_proxy() {
     fi
 
     # 切换 GLOBAL
-    local encoded_group=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$target_group'))" 2>/dev/null || echo "$target_group")
     local result=$(curl -s -X PUT "${api_url}/proxies/GLOBAL" \
         -H "Authorization: Bearer $secret" \
         -H "Content-Type: application/json" \
@@ -171,7 +218,7 @@ patch_config() {
     cp "$config_file" "${config_file}.bak"
 
     # 修改端口
-    sed -i "s/mixed-port: [0-9]*/mixed-port: $mixed_port/" "$config_file"
+    sed -i "s/mixed-port: [0-9][0-9]*/mixed-port: $mixed_port/" "$config_file"
     sed -i "s/external-controller: [^ ]*/external-controller: 0.0.0.0:$ext_port/" "$config_file"
 
     # 添加 external-ui 和 secret（如果不存在）
@@ -186,14 +233,11 @@ patch_config() {
     fi
 
     # 修改 DNS 配置
-    # 检查是否有 dns: 配置块
     if grep -q "^dns:" "$config_file"; then
-        # 在 dns 块中添加必要配置
-        sed -i '/^dns:/a\  respect-rules: false' "$config_file" 2>/dev/null || true
-
-        # 添加 proxy-server-nameserver（如果不存在）
+        # 已有 dns 块，添加必要配置
         if ! grep -q "proxy-server-nameserver:" "$config_file"; then
-            sed -i '/^dns:/a\  proxy-server-nameserver:\n    - system' "$config_file"
+            # 使用 awk 来可靠地添加配置
+            awk '/^dns:/{print; print "  proxy-server-nameserver:"; print "    - system"; next}1' "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
         fi
     else
         # 添加完整的 dns 配置
@@ -213,12 +257,22 @@ EOF
 
     # 添加 nameserver-policy（如果有节点域名）
     if [ -n "$node_domain" ]; then
+        # 检查是否已有 nameserver-policy
         if ! grep -q "nameserver-policy:" "$config_file"; then
-            echo "" >> "$config_file"
-            echo "  nameserver-policy:" >> "$config_file"
+            # 在 dns 块末尾添加 nameserver-policy
+            awk -v domain="$node_domain" '
+                /^dns:/ { in_dns=1 }
+                in_dns && /^[a-z]/ && !/^(dns|enable|respect|listen|default|proxy|enhanced|nameserver)/ { in_dns=0 }
+                in_dns && /^enhanced-mode:/ {
+                    print
+                    print "  nameserver-policy:"
+                    print "    \"+." domain "\":"
+                    print "      - 223.5.5.5"
+                    next
+                }
+                { print }
+            ' "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
         fi
-        echo "    \"+.$node_domain\":" >> "$config_file"
-        echo "    - 223.5.5.5" >> "$config_file"
         ok "已添加节点域名 DNS 策略: $node_domain"
     fi
 
@@ -236,14 +290,19 @@ main() {
 
     # 解析参数
     local SUB_URL=""
-    for arg in "$@"; do
-        case $arg in
+    while [[ $# -gt 0 ]]; do
+        case $1 in
             --sub=*)
-                SUB_URL="${arg#*=}"
+                SUB_URL="${1#*=}"
+                shift
                 ;;
             --sub)
                 shift
                 SUB_URL="$1"
+                shift
+                ;;
+            *)
+                shift
                 ;;
         esac
     done
@@ -335,7 +394,11 @@ EOF
         patch_config "$config_file" "$MIXED_PORT" "$EXT_PORT" "$NODE_DOMAIN"
     fi
 
-    # 7. 设置代理环境变量
+    # 7. 生成用户 .env 配置
+    info "生成用户配置文件..."
+    generate_user_env "$MIXED_PORT" "$EXT_PORT" "$NODE_DOMAIN" "$SUB_URL"
+
+    # 8. 设置代理环境变量
     if [ "$SET_PROXY" = "y" ] || [ "$SET_PROXY" = "yes" ]; then
         if ! grep -q "http_proxy.*$MIXED_PORT" "$HOME/.bashrc" 2>/dev/null; then
             cat >> "$HOME/.bashrc" <<EOF
@@ -351,7 +414,7 @@ EOF
         fi
     fi
 
-    # 8. 启动服务
+    # 9. 启动服务
     info "启动 mihomo 服务..."
     if systemctl is-active --quiet "mihomo@$USER" 2>/dev/null; then
         warn "服务已在运行，跳过启动"
@@ -365,7 +428,7 @@ EOF
         fi
     fi
 
-    # 9. 设置开机自启
+    # 10. 设置开机自启
     info "设置开机自启..."
     if systemctl is-enabled --quiet "mihomo@$USER" 2>/dev/null; then
         ok "开机自启已设置"
@@ -377,15 +440,15 @@ EOF
         fi
     fi
 
-    # 10. 自动切换 GLOBAL
+    # 11. 自动切换 GLOBAL
     info "自动切换代理节点..."
     sleep 1  # 等待 API 就绪
     switch_global_proxy "$EXT_PORT" "mihomo"
 
-    # 获取服务器 IP
-    SERVER_IP=$(curl -s --connect-timeout 5 ifconfig.me 2>/dev/null || echo "<服务器IP>")
+    # 获取服务器 IP 用于显示
+    local SERVER_IP=$(get_server_ip)
 
-    # 11. 完成
+    # 12. 完成
     echo ""
     echo -e "${GREEN}╔════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║            部署完成!                    ║${NC}"
@@ -399,6 +462,10 @@ EOF
     echo -e "${BLUE}▶ 代理地址:${NC}"
     echo "  HTTP/SOCKS5: http://127.0.0.1:$MIXED_PORT"
     echo ""
+    echo -e "${BLUE}▶ 配置文件:${NC}"
+    echo "  用户配置: $USER_ENV_FILE"
+    echo "  主配置: $config_file"
+    echo ""
     echo -e "${BLUE}▶ 使用方法:${NC}"
     echo "  设置代理环境变量："
     echo "    export http_proxy=\"http://127.0.0.1:$MIXED_PORT\""
@@ -406,6 +473,9 @@ EOF
     echo ""
     echo "  验证代理："
     echo "    curl -x http://127.0.0.1:$MIXED_PORT https://www.google.com"
+    echo ""
+    echo "  更新订阅："
+    echo "    $SCRIPT_DIR/update_subscription.sh"
     echo ""
 }
 

@@ -29,6 +29,7 @@ SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
 | 自动下载 Web UI | 下载 zashboard 到正确目录 |
 | 自动修改配置 | 修改端口、UI 路径、密钥 |
 | 自动配置 DNS | 提取节点域名后缀，添加正确的 DNS 配置 |
+| 生成用户配置文件 | 创建 `~/.config/clash/.env` 保存端口等信息 |
 | 解决 mihomo bug | 自动添加 `proxy-server-nameserver: system` |
 
 ### 一键部署示例
@@ -40,12 +41,13 @@ SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
 # 输出示例：
 # ✓ 服务模板已存在
 # ✓ 目录创建完成: /home/user/.config/clash
-# ! 端口 7890 被占用，代理端口自动分配: 17890
-# ✓ 代理端口: 17890
-# ✓ 控制台端口: 19090
+# ! 端口 7890 被占用，代理端口自动分配: 27890
+# ✓ 代理端口: 27890
+# ✓ 控制台端口: 8305
 # ✓ 订阅配置下载完成
 # ✓ Web UI 下载完成
 # ✓ 配置文件已修改
+# ✓ 用户配置已保存到: /home/user/.config/clash/.env
 # ✓ 已添加节点域名 DNS 策略: example.com
 ```
 
@@ -59,7 +61,28 @@ SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
 
 ---
 
-## 二、安装服务模板（首次使用，需要 root）
+## 二、用户配置文件
+
+部署后生成 `~/.config/clash/.env`，这是用户级别的配置文件：
+
+```bash
+# ~/.config/clash/.env - 用户配置文件
+MIXED_PORT=27890              # 代理端口
+EXTERNAL_PORT=8305            # Web UI 控制台端口
+SECRET=mihomo                 # Web UI 密钥
+SUB_URL=https://...           # 订阅链接
+NODE_DOMAIN=example.com       # 节点域名后缀（用于 DNS 策略）
+HTTP_PROXY=http://127.0.0.1:27890
+SOCKS5_PROXY=socks5://127.0.0.1:27890
+```
+
+**作用：**
+- `update_subscription.sh` 读取此文件获取端口和订阅链接
+- 更新订阅时保持端口不变
+
+---
+
+## 三、安装服务模板（首次使用，需要 root）
 
 ```bash
 sudo tee /etc/systemd/system/mihomo@.service <<'EOF'
@@ -88,25 +111,25 @@ sudo systemctl daemon-reload
 
 ---
 
-## 三、手动部署步骤（可选）
+## 四、手动部署步骤（可选）
 
 如果不想使用一键脚本，可按以下步骤手动部署。
 
-### 3.1 检查端口占用
+### 4.1 检查端口占用
 
 ```bash
 ss -tunl | grep -E "7890|9090"
 ```
 
-**如果端口被占用**，需要使用其他端口（如 17890、19090）。
+**如果端口被占用**，需要使用其他端口（如 27890、8305）。
 
-### 3.2 创建目录结构
+### 4.2 创建目录结构
 
 ```bash
 mkdir -p ~/.config/clash/resources/dist
 ```
 
-### 3.3 下载配置文件
+### 4.3 下载配置文件
 
 ```bash
 # 下载订阅配置
@@ -119,15 +142,28 @@ unzip dist.zip -d dist/
 rm dist.zip
 ```
 
-### 3.4 修改配置文件
+### 4.4 创建用户配置文件
+
+```bash
+cat > ~/.config/clash/.env <<EOF
+# Mihomo 用户配置
+MIXED_PORT=27890
+EXTERNAL_PORT=8305
+SECRET=mihomo
+SUB_URL=你的订阅链接
+NODE_DOMAIN=
+EOF
+```
+
+### 4.5 修改配置文件
 
 编辑 `~/.config/clash/config.yaml`，修改以下关键配置：
 
 #### 端口配置
 
 ```yaml
-mixed-port: 17890  # 避免冲突
-external-controller: 0.0.0.0:19090
+mixed-port: 27890  # 避免冲突
+external-controller: 0.0.0.0:8305
 external-ui: /home/你的用户名/.config/clash/resources/dist
 secret: "mihomo"
 allow-lan: true
@@ -147,7 +183,7 @@ dns:
   enhanced-mode: redir-host
   nameserver-policy:
     "+.example.com":  # 替换为你的节点域名后缀
-    - 223.5.5.5
+      - 223.5.5.5
 ```
 
 **查找节点域名后缀：**
@@ -159,7 +195,7 @@ grep "server:" ~/.config/clash/config.yaml | head -3
 
 ---
 
-## 四、启动服务
+## 五、启动服务
 
 ```bash
 # 启动
@@ -174,13 +210,13 @@ systemctl status mihomo@$USER
 
 ---
 
-## 五、切换代理节点（重要！）
+## 六、切换代理节点（重要！）
 
 **默认 GLOBAL 选择器是 DIRECT，流量不会走代理，必须手动切换！**
 
 ### 方式一：Web UI
 
-1. 浏览器访问：`http://localhost:9090/ui`
+1. 浏览器访问：`http://localhost:8305/ui/`
 2. 密钥：`mihomo`
 3. 找到 **GLOBAL** 选择器
 4. 从 **DIRECT** 切换到代理节点（如"故障切换"）
@@ -188,12 +224,15 @@ systemctl status mihomo@$USER
 ### 方式二：命令行
 
 ```bash
+# 读取端口
+EXT_PORT=$(grep ^EXTERNAL_PORT= ~/.config/clash/.env | cut -d= -f2)
+
 # 查看可用节点组
-curl -s -H "Authorization: Bearer mihomo" http://localhost:9090/proxies | \
+curl -s -H "Authorization: Bearer mihomo" http://localhost:$EXT_PORT/proxies | \
   python3 -c "import sys,json; d=json.load(sys.stdin); [print(k) for k in d['proxies'].keys()]" | head -20
 
 # 切换到指定节点组
-curl -X PUT "http://localhost:9090/proxies/GLOBAL" \
+curl -X PUT "http://localhost:$EXT_PORT/proxies/GLOBAL" \
   -H "Authorization: Bearer mihomo" \
   -H "Content-Type: application/json" \
   -d '{"name":"♻️ 故障切换"}'
@@ -201,41 +240,107 @@ curl -X PUT "http://localhost:9090/proxies/GLOBAL" \
 
 ---
 
-## 六、验证代理
+## 七、订阅更新
+
+### 手动更新
 
 ```bash
-# 测试 Google
-curl -x http://127.0.0.1:7890 https://www.google.com
+# 更新当前用户
+./update_subscription.sh
 
-# 测试 YouTube
-curl -x http://127.0.0.1:7890 https://www.youtube.com
+# 更新指定用户（需要 root）
+./update_subscription.sh --user username
 
-# 查看代理 IP
-curl -x http://127.0.0.1:7890 https://ipinfo.io/json
+# 查看所有用户状态
+./update_subscription.sh --status
+```
+
+**更新流程：**
+1. 从 `~/.config/clash/.env` 读取端口配置
+2. 下载新订阅
+3. 备份旧配置（保留最近 10 个）
+4. 保持端口不变，更新配置
+5. 重启服务
+6. 自动切换 GLOBAL
+
+### 定时自动更新
+
+```bash
+# 添加 crontab 任务（每天凌晨 4 点更新）
+(crontab -l 2>/dev/null; echo "0 4 * * * $(pwd)/update_subscription.sh --auto") | crontab -
+
+# 或者使用 systemd timer
+sudo tee /etc/systemd/system/mihomo-update.timer <<'EOF'
+[Unit]
+Description=Daily mihomo subscription update
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo tee /etc/systemd/system/mihomo-update.service <<'EOF'
+[Unit]
+Description=Mihomo subscription update
+
+[Service]
+Type=oneshot
+ExecStart=/path/to/update_subscription.sh --auto
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable mihomo-update.timer
 ```
 
 ---
 
-## 七、设置环境变量
+## 八、验证代理
+
+```bash
+# 读取端口
+MIXED_PORT=$(grep ^MIXED_PORT= ~/.config/clash/.env | cut -d= -f2)
+
+# 测试 Google
+curl -x http://127.0.0.1:$MIXED_PORT https://www.google.com
+
+# 测试 YouTube
+curl -x http://127.0.0.1:$MIXED_PORT https://www.youtube.com
+
+# 查看代理 IP
+curl -x http://127.0.0.1:$MIXED_PORT https://ipinfo.io/json
+```
+
+---
+
+## 九、设置环境变量
 
 ### 临时设置
 
 ```bash
-export http_proxy="http://127.0.0.1:7890"
-export https_proxy="http://127.0.0.1:7890"
-export all_proxy="socks5://127.0.0.1:7890"
+# 从配置文件读取端口
+source ~/.config/clash/.env
+
+export http_proxy="$HTTP_PROXY"
+export https_proxy="$HTTP_PROXY"
+export all_proxy="$SOCKS5_PROXY"
 export no_proxy="localhost,127.0.0.1"
 ```
 
 ### 永久设置
 
 ```bash
-cat >> ~/.bashrc << 'EOF'
+# 读取端口
+MIXED_PORT=$(grep ^MIXED_PORT= ~/.config/clash/.env | cut -d= -f2)
+
+cat >> ~/.bashrc << EOF
 
 # Mihomo 代理
-export http_proxy="http://127.0.0.1:7890"
-export https_proxy="http://127.0.0.1:7890"
-export all_proxy="socks5://127.0.0.1:7890"
+export http_proxy="http://127.0.0.1:$MIXED_PORT"
+export https_proxy="http://127.0.0.1:$MIXED_PORT"
+export all_proxy="socks5://127.0.0.1:$MIXED_PORT"
 export no_proxy="localhost,127.0.0.1"
 EOF
 
@@ -244,7 +349,7 @@ source ~/.bashrc
 
 ---
 
-## 八、服务管理命令
+## 十、服务管理命令
 
 ```bash
 sudo systemctl start mihomo@$USER     # 启动
@@ -258,26 +363,33 @@ sudo systemctl disable mihomo@$USER   # 取消自启
 
 ---
 
-## 九、访问地址汇总
+## 十一、访问地址汇总
+
+从 `~/.config/clash/.env` 读取端口：
+
+```bash
+MIXED_PORT=$(grep ^MIXED_PORT= ~/.config/clash/.env | cut -d= -f2)
+EXT_PORT=$(grep ^EXTERNAL_PORT= ~/.config/clash/.env | cut -d= -f2)
+```
 
 | 服务 | 地址 |
 |------|------|
-| HTTP 代理 | `http://127.0.0.1:7890` |
-| SOCKS5 代理 | `socks5://127.0.0.1:7890` |
-| Web 控制台 | `http://localhost:9090/ui` |
-| API 地址 | `http://localhost:9090` |
+| HTTP 代理 | `http://127.0.0.1:<MIXED_PORT>` |
+| SOCKS5 代理 | `socks5://127.0.0.1:<MIXED_PORT>` |
+| Web 控制台 | `http://localhost:<EXTERNAL_PORT>/ui/` |
+| API 地址 | `http://localhost:<EXTERNAL_PORT>` |
 
-**局域网访问：** `http://<服务器IP>:9090/ui`
+**局域网访问：** `http://<服务器IP>:<EXTERNAL_PORT>/ui/`
 
 ---
 
-## 十、常见问题排查
+## 十二、常见问题排查
 
 ### 问题 1：节点全部超时/红色
 
 **原因：** GLOBAL 选择器为 DIRECT
 
-**解决：** 切换到代理节点（见第五步）
+**解决：** 切换到代理节点（见第六步）
 
 ### 问题 2：DNS 解析失败
 
@@ -292,15 +404,32 @@ sudo systemctl disable mihomo@$USER   # 取消自启
 
 **原因：** 服务缺少网络权限
 
-**解决：** 确保服务模板包含 `CapabilityBoundingSet` 配置（见第二步）
+**解决：** 确保服务模板包含 `CapabilityBoundingSet` 配置（见第三步）
 
 ### 问题 4：端口被占用
 
 **解决：** 使用 `./deploy.sh` 自动分配可用端口，或手动修改配置文件中的端口号
 
+### 问题 5：更新订阅后端口变了
+
+**原因：** 缺少 `~/.config/clash/.env` 文件
+
+**解决：**
+```bash
+# 创建用户配置文件
+cat > ~/.config/clash/.env <<EOF
+MIXED_PORT=你的代理端口
+EXTERNAL_PORT=你的控制台端口
+SECRET=mihomo
+SUB_URL=你的订阅链接
+EOF
+```
+
 ---
 
-## 十一、deploy.sh 参数说明
+## 十三、脚本参数说明
+
+### deploy.sh
 
 | 参数 | 说明 |
 |------|------|
@@ -312,6 +441,24 @@ sudo systemctl disable mihomo@$USER   # 取消自启
 ```bash
 # 自动下载订阅 + 设置环境变量
 SET_PROXY=y ./deploy.sh --sub "https://your-sub-url"
+```
+
+### update_subscription.sh
+
+| 参数 | 说明 |
+|------|------|
+| `--auto` | 自动模式（无交互，适合定时任务） |
+| `--user USER` | 指定用户更新 |
+| `--status` | 显示所有用户状态 |
+| `--help` | 显示帮助信息 |
+
+**示例：**
+```bash
+# 定时任务
+./update_subscription.sh --auto
+
+# 查看状态
+./update_subscription.sh --status
 ```
 
 ---
