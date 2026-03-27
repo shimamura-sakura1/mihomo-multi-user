@@ -84,7 +84,7 @@ allocate_port() {
 
     # 默认端口被占用，分配新端口
     local new_port=$(get_available_port)
-    warn "端口 $preferred_port 被占用，${port_name}自动分配: $new_port"
+    echo -e "${YELLOW}! 端口 $preferred_port 被占用，${port_name}自动分配: $new_port${NC}" >&2
     echo $new_port
 }
 
@@ -160,6 +160,71 @@ EOF
     ok "用户配置已保存到: $USER_ENV_FILE"
 }
 
+# 生成 query.txt 信息文件
+generate_query_file() {
+    local mixed_port=$1
+    local ext_port=$2
+    local config_file=$3
+    local log_file="$CLASH_DIR/query.txt"
+    local server_ip=$(get_server_ip)
+
+    cat > "$log_file" <<EOF
+========================================
+Mihomo 服务配置信息
+生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+用户: $USER
+========================================
+
+【端口信息】
+代理端口 (Mixed Port): $mixed_port
+Web UI 端口 (External Controller): $ext_port
+
+【Web UI 访问地址】
+本地访问: http://127.0.0.1:$ext_port/ui/
+远程访问: http://$server_ip:$ext_port/ui/
+密钥 (Secret): mihomo
+
+【代理地址】
+HTTP 代理: http://127.0.0.1:$mixed_port
+SOCKS5 代理: socks5://127.0.0.1:$mixed_port
+
+【配置文件位置】
+主配置: $config_file
+用户环境变量: $USER_ENV_FILE
+此文件: $log_file
+
+【调试命令】
+查看服务状态:
+  systemctl status mihomo@$USER
+
+查看日志:
+  journalctl -u mihomo@$USER -f
+
+测试代理:
+  curl -x http://127.0.0.1:$mixed_port https://www.google.com
+
+查看端口占用:
+  ss -tunl | grep -E "$mixed_port|$ext_port"
+
+重启服务:
+  sudo systemctl restart mihomo@$USER
+
+【API 接口】
+获取代理组:
+  curl -s -H "Authorization: Bearer mihomo" http://localhost:$ext_port/proxies | jq
+
+切换 GLOBAL 代理:
+  curl -X PUT http://localhost:$ext_port/proxies/GLOBAL \\
+    -H "Authorization: Bearer mihomo" \\
+    -H "Content-Type: application/json" \\
+    -d '{"name":"🚀 节点选择"}'
+
+========================================
+EOF
+
+    ok "查询信息已保存到: $log_file"
+}
+
 # 切换 GLOBAL 选择器到代理节点
 switch_global_proxy() {
     local ext_port=$1
@@ -217,43 +282,32 @@ patch_config() {
     # 备份原配置
     cp "$config_file" "${config_file}.bak"
 
-    # 修改端口
-    sed -i "s/mixed-port: [0-9][0-9]*/mixed-port: $mixed_port/" "$config_file"
-    sed -i "s/external-controller: [^ ]*/external-controller: 0.0.0.0:$ext_port/" "$config_file"
-
-    # 添加 external-ui 和 secret（如果不存在）
-    if ! grep -q "^external-ui:" "$config_file"; then
-        sed -i "/^external-controller:/a external-ui: $RESOURCES_DIR/dist" "$config_file"
-    else
-        sed -i "s|^external-ui:.*|external-ui: $RESOURCES_DIR/dist|" "$config_file"
-    fi
-
-    if ! grep -q "^secret:" "$config_file"; then
-        sed -i "/^external-ui:/a secret: \"mihomo\"" "$config_file"
-    fi
-
-    # 修改 DNS 配置
-    if grep -q "^dns:" "$config_file"; then
-        # 已有 dns 块，添加必要配置
-        if ! grep -q "proxy-server-nameserver:" "$config_file"; then
-            # 使用 awk 来可靠地添加配置
-            awk '/^dns:/{print; print "  proxy-server-nameserver:"; print "    - system"; next}1' "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
-        fi
-    else
-        # 添加完整的 dns 配置
-        cat >> "$config_file" <<EOF
-
-dns:
-  enable: true
-  respect-rules: false
-  listen: 0.0.0.0:1053
-  default-nameserver:
-    - 223.5.5.5
-  proxy-server-nameserver:
-    - system
-  enhanced-mode: redir-host
-EOF
-    fi
+    # 使用 awk 修改端口和添加字段（更可靠）
+    awk -v mixed="$mixed_port" -v ext="$ext_port" -v ui="$RESOURCES_DIR/dist" '
+    /^mixed-port:/ { $2 = mixed }
+    /^external-controller:/ {
+        $2 = "0.0.0.0:" ext
+        print
+        # 立即在下一行插入 external-ui（如果需要）
+        if (!ext_ui_added && ui != "") {
+            print "external-ui: " ui
+            ext_ui_added = 1
+        }
+        next
+    }
+    /^external-ui:/ {
+        $2 = ui
+        ext_ui_added = 1
+    }
+    /^secret:/ { $0 = "secret: \"mihomo\"" }
+    { print }
+    END {
+        # 如果 external-ui 没有被添加且 external-controller 存在，在文件末尾添加
+        if (!ext_ui_added && ext != "") {
+            print "external-ui: " ui
+        }
+    }
+    ' "$config_file" > "$config_file.tmp" && mv "$config_file.tmp" "$config_file"
 
     # 添加 nameserver-policy（如果有节点域名）
     if [ -n "$node_domain" ]; then
@@ -417,12 +471,14 @@ EOF
     # 9. 启动服务
     info "启动 mihomo 服务..."
     if systemctl is-active --quiet "mihomo@$USER" 2>/dev/null; then
-        warn "服务已在运行，跳过启动"
+        ok "服务已在运行"
     else
-        if sudo systemctl start "mihomo@$USER" 2>/dev/null; then
+        # 先检测是否需要 sudo 密码
+        if sudo -n systemctl start "mihomo@$USER" >/dev/null 2>&1; then
             ok "服务启动成功"
-            # 等待服务就绪
             sleep 2
+        elif sudo -n true 2>&1 | grep -q "password"; then
+            warn "需要 sudo 密码，请手动执行: sudo systemctl start mihomo@\$USER"
         else
             fail "服务启动失败，请检查配置"
         fi
@@ -436,11 +492,13 @@ EOF
         if sudo systemctl enable "mihomo@$USER" 2>/dev/null; then
             ok "开机自启设置成功"
         else
-            warn "开机自启设置失败，请手动执行: sudo systemctl enable mihomo@\$_USER"
+            warn "开机自启设置失败，请手动执行: sudo systemctl enable mihomo@\$USER"
         fi
     fi
 
-    # 11. 自动切换 GLOBAL
+    # 11. 生成 query.txt 信息文件
+    info "生成查询信息文件..."
+    generate_query_file "$MIXED_PORT" "$EXT_PORT" "$config_file"
     info "自动切换代理节点..."
     sleep 1  # 等待 API 就绪
     switch_global_proxy "$EXT_PORT" "mihomo"
@@ -465,8 +523,10 @@ EOF
     echo -e "${BLUE}▶ 配置文件:${NC}"
     echo "  用户配置: $USER_ENV_FILE"
     echo "  主配置: $config_file"
+    echo "  查询信息: $CLASH_DIR/query.txt"
     echo ""
     echo -e "${BLUE}▶ 使用方法:${NC}"
+    echo "  查看所有信息: cat $CLASH_DIR/query.txt"
     echo "  设置代理环境变量："
     echo "    export http_proxy=\"http://127.0.0.1:$MIXED_PORT\""
     echo "    export https_proxy=\"http://127.0.0.1:$MIXED_PORT\""

@@ -56,7 +56,7 @@ dns:
     - system
   nameserver-policy:
     "+.example.com":
-    - 202.120.80.2
+    - <your-school-dns>
     - 223.5.5.5
 ```
 
@@ -66,7 +66,7 @@ dns:
 
 **现象：**
 ```
-connect failed: dial tcp 61.172.164.20:8704: operation not permitted
+connect failed: dial tcp <node-ip>:<node-port>: operation not permitted
 ```
 
 **原因：**

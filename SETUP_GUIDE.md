@@ -30,7 +30,8 @@ SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
 | 自动修改配置 | 修改端口、UI 路径、密钥 |
 | 自动配置 DNS | 提取节点域名后缀，添加正确的 DNS 配置 |
 | 生成用户配置文件 | 创建 `~/.config/clash/.env` 保存端口等信息 |
-| 解决 mihomo bug | 自动添加 `proxy-server-nameserver: system` |
+| 生成查询信息文件 | 创建 `~/.config/clash/query.txt` 包含所有访问地址和调试命令 |
+| 自动切换代理 | 自动将 GLOBAL 切换到可用代理节点 |
 
 ### 一键部署示例
 
@@ -49,6 +50,8 @@ SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
 # ✓ 配置文件已修改
 # ✓ 用户配置已保存到: /home/user/.config/clash/.env
 # ✓ 已添加节点域名 DNS 策略: example.com
+# ✓ 查询信息已保存到: /home/user/.config/clash/query.txt
+# ✓ GLOBAL 已自动切换到: 🚀 节点选择
 ```
 
 ---
@@ -63,7 +66,11 @@ SET_PROXY=y ./deploy.sh --sub "你的订阅链接"
 
 ## 二、用户配置文件
 
-部署后生成 `~/.config/clash/.env`，这是用户级别的配置文件：
+部署后生成以下文件：
+
+### 2.1 环境配置文件 (`.env`)
+
+`~/.config/clash/.env` 保存端口和订阅信息：
 
 ```bash
 # ~/.config/clash/.env - 用户配置文件
@@ -79,6 +86,23 @@ SOCKS5_PROXY=socks5://127.0.0.1:27890
 **作用：**
 - `update_subscription.sh` 读取此文件获取端口和订阅链接
 - 更新订阅时保持端口不变
+
+### 2.2 查询信息文件 (`query.txt`)
+
+`~/.config/clash/query.txt` 包含所有部署信息和调试命令：
+
+```bash
+# 查看所有信息
+cat ~/.config/clash/query.txt
+```
+
+**内容包括：**
+- 端口信息（代理端口、Web UI 端口）
+- Web UI 访问地址（本地和远程）
+- 代理地址（HTTP/SOCKS5）
+- 配置文件位置
+- 调试命令（查看状态、日志、测试代理等）
+- API 接口示例
 
 ---
 
@@ -210,11 +234,11 @@ systemctl status mihomo@$USER
 
 ---
 
-## 六、切换代理节点（重要！）
+## 六、切换代理节点（已自动处理）
 
-**默认 GLOBAL 选择器是 DIRECT，流量不会走代理，必须手动切换！**
+**注意：** `deploy.sh` 已自动将 GLOBAL 切换到可用代理节点，通常无需手动操作。
 
-### 方式一：Web UI
+如需手动切换：
 
 1. 浏览器访问：`http://localhost:8305/ui/`
 2. 密钥：`mihomo`
@@ -365,6 +389,8 @@ sudo systemctl disable mihomo@$USER   # 取消自启
 
 ## 十一、访问地址汇总
 
+**快速查看：** `cat ~/.config/clash/query.txt`
+
 从 `~/.config/clash/.env` 读取端口：
 
 ```bash
@@ -387,7 +413,7 @@ EXT_PORT=$(grep ^EXTERNAL_PORT= ~/.config/clash/.env | cut -d= -f2)
 
 ### 问题 1：节点全部超时/红色
 
-**原因：** GLOBAL 选择器为 DIRECT
+**原因：** GLOBAL 选择器为 DIRECT（deploy.sh 已自动切换，如仍有问题请手动检查）
 
 **解决：** 切换到代理节点（见第六步）
 
@@ -396,9 +422,9 @@ EXT_PORT=$(grep ^EXTERNAL_PORT= ~/.config/clash/.env | cut -d= -f2)
 **日志：** `dns resolve failed: couldn't find ip`
 
 **解决：**
-1. 确保 `proxy-server-nameserver: system` 已配置
-2. 添加 `nameserver-policy` 解析节点域名
-3. 或使用 `./deploy.sh` 自动处理
+1. 确保 `proxy-server-nameserver: system` 已配置（deploy.sh 自动处理）
+2. 添加 `nameserver-policy` 解析节点域名（deploy.sh 自动处理）
+3. 或使用 `./deploy.sh` 重新部署
 
 ### 问题 3：operation not permitted
 

@@ -24,7 +24,9 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
 ```
 ~/.config/clash/
 ├── config.yaml        # Subscription config
-├── resources/dist/    # Web UI (zashboard)
+├── .env               # User environment config (ports, secret)
+├── query.txt          # Deployment info & debugging commands
+└── resources/dist/    # Web UI (zashboard)
 ```
 
 ## Critical Configuration Patterns
@@ -68,6 +70,12 @@ journalctl -u mihomo@$USER -f
 SET_PROXY=y ./deploy.sh --sub "subscription-url"
 ```
 
+### Quick Info
+```bash
+# View all deployment info
+cat ~/.config/clash/query.txt
+```
+
 ### Testing
 ```bash
 # Test proxy connectivity
@@ -95,10 +103,6 @@ curl -X PUT "http://localhost:<ext-port>/proxies/GLOBAL" \
 
 ## Known Issues
 
-1. **DNS Resolution Failure**: mihomo bug #1422 - `proxy-server-nameserver` doesn't work. Must use `system` and `nameserver-policy`.
+1. **Port Conflicts**: SSH tunnels often occupy 7890. Use deploy.sh auto-allocation or alternative ports (7890, 9090).
 
-2. **Port Conflicts**: SSH tunnels often occupy 7890. Use deploy.sh auto-allocation or alternative ports (7890, 9090).
-
-3. **Operation Not Permitted**: Missing capability bounding set in service template.
-
-4. **Traffic Not Routing**: GLOBAL selector defaults to DIRECT - must manually switch to proxy node after deployment.
+2. **Operation Not Permitted**: Missing capability bounding set in service template.
