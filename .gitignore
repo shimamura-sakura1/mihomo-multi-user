@@ -26,3 +26,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.iml
+
+# Security update notes (local only)
+SECURITY_UPDATE.md
