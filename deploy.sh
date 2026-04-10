@@ -286,7 +286,7 @@ patch_config() {
     awk -v mixed="$mixed_port" -v ext="$ext_port" -v ui="$RESOURCES_DIR/dist" '
     /^mixed-port:/ { $2 = mixed }
     /^external-controller:/ {
-        $2 = "0.0.0.0:" ext
+        $2 = "127.0.0.1:" ext
         print
         # 立即在下一行插入 external-ui（如果需要）
         if (!ext_ui_added && ui != "") {

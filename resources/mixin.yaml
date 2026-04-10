@@ -3,13 +3,13 @@
 
 # 端口配置
 mixed-port: 7890
-external-controller: "0.0.0.0:9090"
+external-controller: "127.0.0.1:9090"
 external-ui: dist
-secret: ""
+secret: "your-secret-here"
 
 # 网络配置
-allow-lan: true
-bind-address: "*"
+allow-lan: false
+bind-address: "127.0.0.1"
 mode: rule
 
 # 日志
